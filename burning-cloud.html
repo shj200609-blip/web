@@ -231,16 +231,16 @@
 
     /* ---- embers: recycled particles rising from the burning edge ---- */
     var embers = [];
-    for (var i = 0; i < 30; i++) {
+    for (var i = 0; i < 42; i++) {
       embers.push({
         ph: Math.random(),
-        spd: 0.16 + Math.random() * 0.34,
-        ox: (Math.random() - 0.35) * 0.13,
-        oy: (Math.random() - 0.5) * 0.085,
-        rise: 0.05 + Math.random() * 0.055,
-        swayA: 5 + Math.random() * 16,
+        spd: 0.18 + Math.random() * 0.34,
+        ox: (Math.random() - 0.5) * 0.070,
+        oy: (Math.random() - 0.5) * 0.045,
+        rise: 0.052 + Math.random() * 0.060,
+        swayA: 3 + Math.random() * 10,
         swayF: 1.5 + Math.random() * 2.5,
-        sz: 0.8 + Math.random() * 1.7,
+        sz: 1.0 + Math.random() * 1.9,
         twF: 3 + Math.random() * 5,
         dep: Math.random()
       });
@@ -259,20 +259,7 @@
       });
     }
 
-    /* ---- foreground bokeh (out-of-focus near-field particles) ---- */
-    var bokeh = [];
-    for (var b = 0; b < 14; b++) {
-      bokeh.push({
-        x: Math.random(), y: Math.random(),
-        vx: (Math.random() - 0.5) * 0.010,
-        vy: (Math.random() - 0.5) * 0.008,
-        ph: Math.random() * 6.283,
-        sp: 0.1 + Math.random() * 0.4,
-        r: 5 + Math.random() * 11
-      });
-    }
-
-    /* ---- viewport / input ---- */
+    /* ---- viewport ---- */
     var W = 0, H = 0, dpr = 1;
     function rebuildVignette() {
       vignetteLayer = document.createElement("canvas");
@@ -328,13 +315,6 @@
     if (window.visualViewport) window.visualViewport.addEventListener("resize", resize);
     resize();
 
-    var mx = 0, my = 0, smx = 0, smy = 0;
-    window.addEventListener("pointermove", function (e) {
-      mx = (e.clientX / window.innerWidth) * 2 - 1;
-      my = -((e.clientY / window.innerHeight) * 2 - 1);
-    });
-    window.addEventListener("pointerleave", function () { mx = 0; my = 0; });
-    window.addEventListener("blur", function () { mx = 0; my = 0; });
     window.addEventListener("keydown", function (e) {
       if (e.key === "f" || e.key === "F") {
         if (document.fullscreenElement) { document.exitFullscreen(); }
@@ -348,19 +328,8 @@
     var FRAME_INTERVAL = 1000 / TARGET_FPS;
     var lastFrame = -Infinity;
 
-    /* burning-edge anchor inside cloud.png (normalized 0..1) */
-    var FIRE = { x: 0.705, y: 0.335 };
-
-    /* ---- naked-eye 3D tuning ----
-       PARALLAX  mouse parallax master switch (0 = fully static, only breathing zoom)
-       SWAY      strength of the automatic barely-there drift (works without mouse)
-       CLOUD_T   depth threshold splitting background from the cloud
-       SHADOW    cloud edge shadow: offset (fraction of photo size) + strength */
-    var PARALLAX = 1;
-    var SWAY = 1;
-    var CLOUD_T = 0.5;
-    var SHADOW = { ox: 0.006, oy: 0.010, a: 0.40 };
-    var motionScale = 0.35 + 0.65 * slow;   /* honours prefers-reduced-motion */
+    /* Flame center inside cloud.png (normalized 0..1). */
+    var FIRE = { x: 0.550, y: 0.275 };
 
     /* The source image is square. Cover fills the viewport so no side bars show. */
     var FIT_MODE = "cover";
@@ -378,9 +347,6 @@
       if (document.hidden || now - lastFrame < FRAME_INTERVAL) return;
       lastFrame = now;
       var t = (now - t0) / 1000 * slow;
-      smx += (mx - smx) * 0.05;
-      smy += (my - smy) * 0.05;
-
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.globalCompositeOperation = "source-over";
       ctx.globalAlpha = 1;
@@ -418,12 +384,12 @@
         var fade = Math.sin(life * 3.14159);
         var ex = X(FIRE.x + e.ox)
           + Math.sin(life * e.swayF * 3.14159 + e.ph * 9.7) * e.swayA * dpr
-          + life * W * 0.018;
+          + life * W * 0.006;
         var ey = Y(FIRE.y + e.oy) - life * e.rise * H;
         var dep = 0.35 + e.dep * 1.15; /* near embers are larger, brighter, softer */
-        var a = fade * (0.30 + 0.40 * Math.abs(Math.sin(t * e.twF + e.ph * 7.3))) * (0.45 + dep * 0.55);
-        glow(ex, ey, e.sz * dep * 5 * dpr, "255,90,20", a * 0.40);
-        ctx.fillStyle = "rgba(255,185,95," + (a * 0.9).toFixed(3) + ")";
+        var a = fade * (0.42 + 0.44 * Math.abs(Math.sin(t * e.twF + e.ph * 7.3))) * (0.50 + dep * 0.50);
+        glow(ex, ey, e.sz * dep * 6 * dpr, "255,90,20", a * 0.52);
+        ctx.fillStyle = "rgba(255,198,105," + (a * 0.96).toFixed(3) + ")";
         ctx.beginPath();
         ctx.arc(ex, ey, e.sz * dep * dpr, 0, 6.2832);
         ctx.fill();
@@ -439,15 +405,6 @@
         ctx.beginPath();
         ctx.arc(ux * W, uy * H, d.sz * dpr, 0, 6.2832);
         ctx.fill();
-      }
-
-      /* ---- foreground bokeh: large out-of-focus discs ---- */
-      for (var q = 0; q < bokeh.length; q++) {
-        var bo = bokeh[q];
-        var bx = ((bo.x + t * bo.vx) % 1 + 1) % 1;
-        var by = ((bo.y + t * bo.vy) % 1 + 1) % 1;
-        var ba = 0.05 + 0.07 * Math.abs(Math.sin(t * bo.sp + bo.ph));
-        glow(bx * W, by * H, bo.r * dpr, "205,225,250", ba);
       }
 
       /* ---- film grain: rebuild occasionally, composite once per frame ---- */
