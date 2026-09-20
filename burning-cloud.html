@@ -223,6 +223,66 @@
       });
     }
 
+    /* ---- fire sparks: swaying ember trails anchored to the photographed flame ---- */
+    var fireSparks = [];
+    for (var f = 0; f < 42; f++) {
+      fireSparks.push({
+        phase: Math.random(),
+        speed: 0.15 + Math.random() * 0.25,
+        x: 0.500 + Math.random() * 0.115,
+        y: 0.245 + Math.random() * 0.075,
+        rise: 0.050 + Math.random() * 0.075,
+        drift: (Math.random() - 0.5) * 0.030,
+        sway: 0.008 + Math.random() * 0.018,
+        swayF: 2.0 + Math.random() * 3.5,
+        tail: 0.045 + Math.random() * 0.080,
+        size: 0.55 + Math.random() * 1.15
+      });
+    }
+
+    function sparkPoint(spark, age, time, dx, dy, dw, dh) {
+      var lift = age * age * (3 - 2 * age);
+      var sway = Math.sin(age * spark.swayF * 6.283 + time * (1.5 + spark.swayF * 0.28) + spark.phase * 12.0)
+        * spark.sway * (0.25 + lift * 0.75);
+      return {
+        x: dx + dw * (spark.x + sway + spark.drift * lift),
+        y: dy + dh * (spark.y - spark.rise * lift)
+      };
+    }
+
+    function drawFireSparks(time, dx, dy, dw, dh) {
+      ctx.save();
+      ctx.globalCompositeOperation = "lighter";
+      ctx.lineCap = "round";
+      for (var si = 0; si < fireSparks.length; si++) {
+        var spark = fireSparks[si];
+        var age = (spark.phase + time * spark.speed) % 1;
+        var fade = Math.pow(Math.sin(age * 3.14159), 0.72);
+        var tailAge = Math.max(0, age - spark.tail);
+        var tail = sparkPoint(spark, tailAge, time, dx, dy, dw, dh);
+        var mid = sparkPoint(spark, (age + tailAge) * 0.5, time, dx, dy, dw, dh);
+        var head = sparkPoint(spark, age, time, dx, dy, dw, dh);
+        var trail = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
+        trail.addColorStop(0, "rgba(255,45,8,0)");
+        trail.addColorStop(0.58, "rgba(255,78,10," + (fade * 0.30).toFixed(3) + ")");
+        trail.addColorStop(1, "rgba(255,236,150," + (fade * 0.90).toFixed(3) + ")");
+        ctx.strokeStyle = trail;
+        ctx.lineWidth = spark.size * 1.9 * dpr;
+        ctx.shadowColor = "rgba(255,74,12," + (fade * 0.72).toFixed(3) + ")";
+        ctx.shadowBlur = spark.size * 5 * dpr;
+        ctx.beginPath();
+        ctx.moveTo(tail.x, tail.y);
+        ctx.quadraticCurveTo(mid.x, mid.y, head.x, head.y);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "rgba(255,242,175," + (fade * 0.96).toFixed(3) + ")";
+        ctx.beginPath();
+        ctx.arc(head.x, head.y, spark.size * dpr, 0, 6.2832);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
     /* ---- viewport ---- */
     var W = 0, H = 0, dpr = 1;
     function rebuildVignette() {
@@ -322,6 +382,7 @@
       if (ctx.imageSmoothingQuality !== undefined) ctx.imageSmoothingQuality = "high";
 
       ctx.drawImage(img, dx, dy, dw, dh);
+      drawFireSparks(t, dx, dy, dw, dh);
 
       /* ---- cosmic dust ---- */
       for (var k = 0; k < dust.length; k++) {
