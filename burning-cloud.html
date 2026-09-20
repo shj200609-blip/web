@@ -151,9 +151,7 @@
       var sc = Math.min(1, LAYER_MAX / Math.max(iw, ih));
       layW = Math.max(2, Math.round(iw * sc));
       layH = Math.max(2, Math.round(ih * sc));
-      /* Give adjacent depth bands only a small overlap, so each layer stays
-         distinct when it is offset for the 2.5D camera movement. */
-      var bw = 0.56 / SLICES;
+      var bw = 1.9 / SLICES;
       for (var k = 0; k < SLICES; k++) {
         var vk = (k + 0.5) / SLICES;
 
@@ -189,8 +187,6 @@
     img.onload = function () {
       iw = img.naturalWidth;
       ih = img.naturalHeight;
-      buildDepth();
-      buildSlices();
       ready = true;
     };
     img.src = "cloud.png";
@@ -210,43 +206,108 @@
       g.putImageData(d, 0, 0);
     })();
 
-    /* Cached glow sprites avoid creating dozens of radial gradients every frame. */
-    var glowSprites = Object.create(null);
-    function getGlowSprite(rgb) {
-      if (glowSprites[rgb]) return glowSprites[rgb];
-      var c = document.createElement("canvas");
-      c.width = c.height = 128;
-      var g = c.getContext("2d");
-      var r = 64;
-      var grad = g.createRadialGradient(r, r, 0, r, r, r);
-      grad.addColorStop(0, "rgba(" + rgb + ",1)");
-      grad.addColorStop(1, "rgba(" + rgb + ",0)");
-      g.fillStyle = grad;
-      g.fillRect(0, 0, 128, 128);
-      glowSprites[rgb] = c;
-      return c;
+    /* ---- continuous procedural flame (WebGL, not particles) ---- */
+    var flameCanvas = document.createElement("canvas");
+    flameCanvas.width = 512;
+    flameCanvas.height = 256;
+    var flameGL = flameCanvas.getContext("webgl", { alpha: true, premultipliedAlpha: false });
+    var flameProgram = null;
+    var flameTime = null;
+
+    function makeShader(gl, type, source) {
+      var shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
+      return shader;
     }
+
+    function initFlameRenderer() {
+      if (!flameGL) return;
+      var gl = flameGL;
+      var vertex = [
+        "attribute vec2 a_position;",
+        "varying vec2 v_uv;",
+        "void main() {",
+        "  v_uv = (a_position + 1.0) * 0.5;",
+        "  gl_Position = vec4(a_position, 0.0, 1.0);",
+        "}"
+      ].join("\n");
+      var fragment = [
+        "precision highp float;",
+        "varying vec2 v_uv;",
+        "uniform float u_time;",
+        "float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }",
+        "float noise(vec2 p) {",
+        "  vec2 i = floor(p), f = fract(p);",
+        "  f = f * f * (3.0 - 2.0 * f);",
+        "  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),",
+        "             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);",
+        "}",
+        "float fbm(vec2 p) {",
+        "  float value = 0.0, amp = 0.5;",
+        "  for (int i = 0; i < 5; i++) { value += amp * noise(p); p = p * 2.03 + 17.1; amp *= 0.5; }",
+        "  return value;",
+        "}",
+        "void main() {",
+        "  float rise = 1.0 - v_uv.y;",
+        "  float flow = fbm(vec2(v_uv.x * 3.8, rise * 3.0 - u_time * 0.72));",
+        "  float detail = fbm(vec2(v_uv.x * 11.0 + 4.0, rise * 7.0 - u_time * 1.25));",
+        "  float bend = sin(rise * 6.0 + u_time * 0.75) * 0.035 + (flow - 0.5) * rise * 0.20;",
+        "  float halfWidth = mix(0.45, 0.065, smoothstep(0.0, 0.90, rise));",
+        "  float side = 1.0 - smoothstep(halfWidth, halfWidth + 0.075, abs(v_uv.x - 0.5 - bend));",
+        "  float height = 0.54 + flow * 0.34 + (detail - 0.5) * 0.15;",
+        "  float crown = 1.0 - smoothstep(height - 0.16, height, rise);",
+        "  float alpha = side * crown * smoothstep(0.0, 0.035, rise);",
+        "  float hot = 1.0 - smoothstep(0.06, 0.68, rise);",
+        "  float core = side * (1.0 - smoothstep(0.0, 0.27, abs(v_uv.x - 0.5 - bend))) * hot;",
+        "  vec3 colour = mix(vec3(0.92, 0.035, 0.004), vec3(1.0, 0.69, 0.045), hot);",
+        "  colour = mix(colour, vec3(1.0, 0.95, 0.67), core * 0.68);",
+        "  gl_FragColor = vec4(colour, alpha * (0.76 + detail * 0.24));",
+        "}"
+      ].join("\n");
+      var vs = makeShader(gl, gl.VERTEX_SHADER, vertex);
+      var fs = makeShader(gl, gl.FRAGMENT_SHADER, fragment);
+      if (!vs || !fs) return;
+      flameProgram = gl.createProgram();
+      gl.attachShader(flameProgram, vs);
+      gl.attachShader(flameProgram, fs);
+      gl.linkProgram(flameProgram);
+      if (!gl.getProgramParameter(flameProgram, gl.LINK_STATUS)) {
+        flameProgram = null;
+        return;
+      }
+      var buffer = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+      gl.useProgram(flameProgram);
+      var position = gl.getAttribLocation(flameProgram, "a_position");
+      gl.enableVertexAttribArray(position);
+      gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+      flameTime = gl.getUniformLocation(flameProgram, "u_time");
+      gl.clearColor(0, 0, 0, 0);
+    }
+
+    function drawFlame(time, dx, dy, dw, dh) {
+      if (!flameProgram) return;
+      var gl = flameGL;
+      gl.viewport(0, 0, flameCanvas.width, flameCanvas.height);
+      gl.useProgram(flameProgram);
+      gl.uniform1f(flameTime, time);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = 0.78;
+      ctx.drawImage(flameCanvas, dx + dw * 0.480, dy + dh * 0.185, dw * 0.160, dh * 0.210);
+      ctx.restore();
+    }
+
+    initFlameRenderer();
 
     var grainLayer = null;
     var vignetteLayer = null;
     var lastGrainUpdate = -Infinity;
-
-    /* ---- embers: recycled particles rising from the burning edge ---- */
-    var embers = [];
-    for (var i = 0; i < 42; i++) {
-      embers.push({
-        ph: Math.random(),
-        spd: 0.18 + Math.random() * 0.34,
-        ox: (Math.random() - 0.5) * 0.070,
-        oy: (Math.random() - 0.5) * 0.045,
-        rise: 0.052 + Math.random() * 0.060,
-        swayA: 3 + Math.random() * 10,
-        swayF: 1.5 + Math.random() * 2.5,
-        sz: 1.0 + Math.random() * 1.9,
-        twF: 3 + Math.random() * 5,
-        dep: Math.random()
-      });
-    }
 
     /* ---- cosmic dust drifting across the whole frame ---- */
     var dust = [];
@@ -330,20 +391,9 @@
     var FRAME_INTERVAL = 1000 / TARGET_FPS;
     var lastFrame = -Infinity;
 
-    /* Flame center inside cloud.png (normalized 0..1). */
-    var FIRE = { x: 0.550, y: 0.275 };
-    var CLOUD_T = 0.50;
-
     /* The source image is square. Cover fills the viewport so no side bars show. */
     var FIT_MODE = "cover";
 
-    function glow(x, y, r, rgb, a) {
-      if (a <= 0 || r <= 0) return;
-      var oldAlpha = ctx.globalAlpha;
-      ctx.globalAlpha = oldAlpha * a;
-      ctx.drawImage(getGlowSprite(rgb), x - r, y - r, r * 2, r * 2);
-      ctx.globalAlpha = oldAlpha;
-    }
     var t0 = performance.now();
     function frame(now) {
       requestAnimationFrame(frame);
@@ -370,49 +420,8 @@
       ctx.imageSmoothingEnabled = true;
       if (ctx.imageSmoothingQuality !== undefined) ctx.imageSmoothingQuality = "high";
 
-      /* A slow, automatic camera drift creates depth without mouse input.
-         The blurred source becomes the distant sky; the near cloud slices
-         stay sharp and move a little farther, producing a restrained 2.5D look. */
-      var camX = Math.sin(t * 0.13) * W * 0.0024;
-      var camY = Math.cos(t * 0.11) * H * 0.0018;
-      if (hasFilter) ctx.filter = "blur(" + Math.max(0.8, dpr * 0.9) + "px)";
-      ctx.drawImage(img, dx - camX * 0.16, dy - camY * 0.16, dw, dh);
-      if (hasFilter) ctx.filter = "none";
-
-      for (var si = 0; si < slices.length; si++) {
-        var slice = slices[si];
-        if (slice.vk < CLOUD_T) continue;
-        var depth = (slice.vk - CLOUD_T) / (1 - CLOUD_T);
-        var layerX = camX * (0.45 + depth * 1.15);
-        var layerY = camY * (0.45 + depth * 1.15);
-        ctx.drawImage(slice.canvas, dx + layerX, dy + layerY, dw, dh);
-      }
-
-      var flameX = camX * 1.05;
-      var flameY = camY * 1.05;
-      function X(nx) { return dx + nx * dw + flameX; }
-      function Y(ny) { return dy + ny * dh + flameY; }
-
-      /* Keep the source flame unchanged; do not add a blurred glow over its edge. */
-      ctx.globalCompositeOperation = "source-over";
-
-      /* ---- embers rising from the flames ---- */
-      for (var i = 0; i < embers.length; i++) {
-        var e = embers[i];
-        var life = (e.ph + t * e.spd) % 1;
-        var fade = Math.sin(life * 3.14159);
-        var ex = X(FIRE.x + e.ox)
-          + Math.sin(life * e.swayF * 3.14159 + e.ph * 9.7) * e.swayA * dpr
-          + life * W * 0.006;
-        var ey = Y(FIRE.y + e.oy) - life * e.rise * H;
-        var dep = 0.35 + e.dep * 1.15; /* near embers are larger, brighter, softer */
-        var a = fade * (0.42 + 0.44 * Math.abs(Math.sin(t * e.twF + e.ph * 7.3))) * (0.50 + dep * 0.50);
-        glow(ex, ey, e.sz * dep * 6 * dpr, "255,90,20", a * 0.52);
-        ctx.fillStyle = "rgba(255,198,105," + (a * 0.96).toFixed(3) + ")";
-        ctx.beginPath();
-        ctx.arc(ex, ey, e.sz * dep * dpr, 0, 6.2832);
-        ctx.fill();
-      }
+      ctx.drawImage(img, dx, dy, dw, dh);
+      drawFlame(t, dx, dy, dw, dh);
 
       /* ---- cosmic dust ---- */
       for (var k = 0; k < dust.length; k++) {
