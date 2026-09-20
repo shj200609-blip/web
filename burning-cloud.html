@@ -206,105 +206,6 @@
       g.putImageData(d, 0, 0);
     })();
 
-    /* ---- continuous procedural flame (WebGL, not particles) ---- */
-    var flameCanvas = document.createElement("canvas");
-    flameCanvas.width = 512;
-    flameCanvas.height = 256;
-    var flameGL = flameCanvas.getContext("webgl", { alpha: true, premultipliedAlpha: false });
-    var flameProgram = null;
-    var flameTime = null;
-
-    function makeShader(gl, type, source) {
-      var shader = gl.createShader(type);
-      gl.shaderSource(shader, source);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
-      return shader;
-    }
-
-    function initFlameRenderer() {
-      if (!flameGL) return;
-      var gl = flameGL;
-      var vertex = [
-        "attribute vec2 a_position;",
-        "varying vec2 v_uv;",
-        "void main() {",
-        "  v_uv = (a_position + 1.0) * 0.5;",
-        "  gl_Position = vec4(a_position, 0.0, 1.0);",
-        "}"
-      ].join("\n");
-      var fragment = [
-        "precision highp float;",
-        "varying vec2 v_uv;",
-        "uniform float u_time;",
-        "float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }",
-        "float noise(vec2 p) {",
-        "  vec2 i = floor(p), f = fract(p);",
-        "  f = f * f * (3.0 - 2.0 * f);",
-        "  return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),",
-        "             mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);",
-        "}",
-        "float fbm(vec2 p) {",
-        "  float value = 0.0, amp = 0.5;",
-        "  for (int i = 0; i < 5; i++) { value += amp * noise(p); p = p * 2.03 + 17.1; amp *= 0.5; }",
-        "  return value;",
-        "}",
-        "void main() {",
-        "  float rise = 1.0 - v_uv.y;",
-        "  float flow = fbm(vec2(v_uv.x * 3.8, rise * 3.0 - u_time * 0.72));",
-        "  float detail = fbm(vec2(v_uv.x * 11.0 + 4.0, rise * 7.0 - u_time * 1.25));",
-        "  float bend = sin(rise * 6.0 + u_time * 0.75) * 0.035 + (flow - 0.5) * rise * 0.20;",
-        "  float halfWidth = mix(0.45, 0.065, smoothstep(0.0, 0.90, rise));",
-        "  float side = 1.0 - smoothstep(halfWidth, halfWidth + 0.075, abs(v_uv.x - 0.5 - bend));",
-        "  float height = 0.54 + flow * 0.34 + (detail - 0.5) * 0.15;",
-        "  float crown = 1.0 - smoothstep(height - 0.16, height, rise);",
-        "  float alpha = side * crown * smoothstep(0.0, 0.035, rise);",
-        "  float hot = 1.0 - smoothstep(0.06, 0.68, rise);",
-        "  float core = side * (1.0 - smoothstep(0.0, 0.27, abs(v_uv.x - 0.5 - bend))) * hot;",
-        "  vec3 colour = mix(vec3(0.92, 0.035, 0.004), vec3(1.0, 0.69, 0.045), hot);",
-        "  colour = mix(colour, vec3(1.0, 0.95, 0.67), core * 0.68);",
-        "  gl_FragColor = vec4(colour, alpha * (0.76 + detail * 0.24));",
-        "}"
-      ].join("\n");
-      var vs = makeShader(gl, gl.VERTEX_SHADER, vertex);
-      var fs = makeShader(gl, gl.FRAGMENT_SHADER, fragment);
-      if (!vs || !fs) return;
-      flameProgram = gl.createProgram();
-      gl.attachShader(flameProgram, vs);
-      gl.attachShader(flameProgram, fs);
-      gl.linkProgram(flameProgram);
-      if (!gl.getProgramParameter(flameProgram, gl.LINK_STATUS)) {
-        flameProgram = null;
-        return;
-      }
-      var buffer = gl.createBuffer();
-      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
-      gl.useProgram(flameProgram);
-      var position = gl.getAttribLocation(flameProgram, "a_position");
-      gl.enableVertexAttribArray(position);
-      gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-      flameTime = gl.getUniformLocation(flameProgram, "u_time");
-      gl.clearColor(0, 0, 0, 0);
-    }
-
-    function drawFlame(time, dx, dy, dw, dh) {
-      if (!flameProgram) return;
-      var gl = flameGL;
-      gl.viewport(0, 0, flameCanvas.width, flameCanvas.height);
-      gl.useProgram(flameProgram);
-      gl.uniform1f(flameTime, time);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-      ctx.save();
-      ctx.globalCompositeOperation = "screen";
-      ctx.globalAlpha = 0.78;
-      ctx.drawImage(flameCanvas, dx + dw * 0.480, dy + dh * 0.185, dw * 0.160, dh * 0.210);
-      ctx.restore();
-    }
-
-    initFlameRenderer();
-
     var grainLayer = null;
     var vignetteLayer = null;
     var lastGrainUpdate = -Infinity;
@@ -421,7 +322,6 @@
       if (ctx.imageSmoothingQuality !== undefined) ctx.imageSmoothingQuality = "high";
 
       ctx.drawImage(img, dx, dy, dw, dh);
-      drawFlame(t, dx, dy, dw, dh);
 
       /* ---- cosmic dust ---- */
       for (var k = 0; k < dust.length; k++) {
