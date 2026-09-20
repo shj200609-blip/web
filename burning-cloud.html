@@ -151,7 +151,9 @@
       var sc = Math.min(1, LAYER_MAX / Math.max(iw, ih));
       layW = Math.max(2, Math.round(iw * sc));
       layH = Math.max(2, Math.round(ih * sc));
-      var bw = 1.9 / SLICES;
+      /* Give adjacent depth bands only a small overlap, so each layer stays
+         distinct when it is offset for the 2.5D camera movement. */
+      var bw = 0.56 / SLICES;
       for (var k = 0; k < SLICES; k++) {
         var vk = (k + 0.5) / SLICES;
 
@@ -330,6 +332,7 @@
 
     /* Flame center inside cloud.png (normalized 0..1). */
     var FIRE = { x: 0.550, y: 0.275 };
+    var CLOUD_T = 0.50;
 
     /* The source image is square. Cover fills the viewport so no side bars show. */
     var FIT_MODE = "cover";
@@ -367,12 +370,28 @@
       ctx.imageSmoothingEnabled = true;
       if (ctx.imageSmoothingQuality !== undefined) ctx.imageSmoothingQuality = "high";
 
-      /* Draw the source image once so the cloud edge stays single and crisp.
-         No depth-slice offsets, edge shadow, or feathered compositing. */
-      ctx.drawImage(img, dx, dy, dw, dh);
+      /* A slow, automatic camera drift creates depth without mouse input.
+         The blurred source becomes the distant sky; the near cloud slices
+         stay sharp and move a little farther, producing a restrained 2.5D look. */
+      var camX = Math.sin(t * 0.13) * W * 0.0024;
+      var camY = Math.cos(t * 0.11) * H * 0.0018;
+      if (hasFilter) ctx.filter = "blur(" + Math.max(0.8, dpr * 0.9) + "px)";
+      ctx.drawImage(img, dx - camX * 0.16, dy - camY * 0.16, dw, dh);
+      if (hasFilter) ctx.filter = "none";
 
-      function X(nx) { return dx + nx * dw; }
-      function Y(ny) { return dy + ny * dh; }
+      for (var si = 0; si < slices.length; si++) {
+        var slice = slices[si];
+        if (slice.vk < CLOUD_T) continue;
+        var depth = (slice.vk - CLOUD_T) / (1 - CLOUD_T);
+        var layerX = camX * (0.45 + depth * 1.15);
+        var layerY = camY * (0.45 + depth * 1.15);
+        ctx.drawImage(slice.canvas, dx + layerX, dy + layerY, dw, dh);
+      }
+
+      var flameX = camX * 1.05;
+      var flameY = camY * 1.05;
+      function X(nx) { return dx + nx * dw + flameX; }
+      function Y(ny) { return dy + ny * dh + flameY; }
 
       /* Keep the source flame unchanged; do not add a blurred glow over its edge. */
       ctx.globalCompositeOperation = "source-over";
