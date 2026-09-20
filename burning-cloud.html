@@ -206,9 +206,43 @@
       g.putImageData(d, 0, 0);
     })();
 
+    /* Cached glow sprites keep the ember halos inexpensive. */
+    var glowSprites = Object.create(null);
+    function getGlowSprite(rgb) {
+      if (glowSprites[rgb]) return glowSprites[rgb];
+      var c = document.createElement("canvas");
+      c.width = c.height = 128;
+      var g = c.getContext("2d");
+      var r = 64;
+      var grad = g.createRadialGradient(r, r, 0, r, r, r);
+      grad.addColorStop(0, "rgba(" + rgb + ",1)");
+      grad.addColorStop(1, "rgba(" + rgb + ",0)");
+      g.fillStyle = grad;
+      g.fillRect(0, 0, 128, 128);
+      glowSprites[rgb] = c;
+      return c;
+    }
+
     var grainLayer = null;
     var vignetteLayer = null;
     var lastGrainUpdate = -Infinity;
+
+    /* ---- embers: bright, compact sparks rising from the burning edge ---- */
+    var embers = [];
+    for (var i = 0; i < 42; i++) {
+      embers.push({
+        ph: Math.random(),
+        spd: 0.18 + Math.random() * 0.34,
+        ox: (Math.random() - 0.5) * 0.070,
+        oy: (Math.random() - 0.5) * 0.045,
+        rise: 0.052 + Math.random() * 0.060,
+        swayA: 3 + Math.random() * 10,
+        swayF: 1.5 + Math.random() * 2.5,
+        sz: 1.0 + Math.random() * 1.9,
+        twF: 3 + Math.random() * 5,
+        dep: Math.random()
+      });
+    }
 
     /* ---- cosmic dust drifting across the whole frame ---- */
     var dust = [];
@@ -221,66 +255,6 @@
         sp: 0.15 + Math.random() * 0.7,
         sz: 0.5 + Math.random() * 1.1
       });
-    }
-
-    /* ---- fire sparks: swaying ember trails anchored to the photographed flame ---- */
-    var fireSparks = [];
-    for (var f = 0; f < 42; f++) {
-      fireSparks.push({
-        phase: Math.random(),
-        speed: 0.15 + Math.random() * 0.25,
-        x: 0.500 + Math.random() * 0.115,
-        y: 0.245 + Math.random() * 0.075,
-        rise: 0.050 + Math.random() * 0.075,
-        drift: (Math.random() - 0.5) * 0.030,
-        sway: 0.008 + Math.random() * 0.018,
-        swayF: 2.0 + Math.random() * 3.5,
-        tail: 0.045 + Math.random() * 0.080,
-        size: 0.55 + Math.random() * 1.15
-      });
-    }
-
-    function sparkPoint(spark, age, time, dx, dy, dw, dh) {
-      var lift = age * age * (3 - 2 * age);
-      var sway = Math.sin(age * spark.swayF * 6.283 + time * (1.5 + spark.swayF * 0.28) + spark.phase * 12.0)
-        * spark.sway * (0.25 + lift * 0.75);
-      return {
-        x: dx + dw * (spark.x + sway + spark.drift * lift),
-        y: dy + dh * (spark.y - spark.rise * lift)
-      };
-    }
-
-    function drawFireSparks(time, dx, dy, dw, dh) {
-      ctx.save();
-      ctx.globalCompositeOperation = "lighter";
-      ctx.lineCap = "round";
-      for (var si = 0; si < fireSparks.length; si++) {
-        var spark = fireSparks[si];
-        var age = (spark.phase + time * spark.speed) % 1;
-        var fade = Math.pow(Math.sin(age * 3.14159), 0.72);
-        var tailAge = Math.max(0, age - spark.tail);
-        var tail = sparkPoint(spark, tailAge, time, dx, dy, dw, dh);
-        var mid = sparkPoint(spark, (age + tailAge) * 0.5, time, dx, dy, dw, dh);
-        var head = sparkPoint(spark, age, time, dx, dy, dw, dh);
-        var trail = ctx.createLinearGradient(tail.x, tail.y, head.x, head.y);
-        trail.addColorStop(0, "rgba(255,45,8,0)");
-        trail.addColorStop(0.58, "rgba(255,78,10," + (fade * 0.30).toFixed(3) + ")");
-        trail.addColorStop(1, "rgba(255,236,150," + (fade * 0.90).toFixed(3) + ")");
-        ctx.strokeStyle = trail;
-        ctx.lineWidth = spark.size * 1.9 * dpr;
-        ctx.shadowColor = "rgba(255,74,12," + (fade * 0.72).toFixed(3) + ")";
-        ctx.shadowBlur = spark.size * 5 * dpr;
-        ctx.beginPath();
-        ctx.moveTo(tail.x, tail.y);
-        ctx.quadraticCurveTo(mid.x, mid.y, head.x, head.y);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = "rgba(255,242,175," + (fade * 0.96).toFixed(3) + ")";
-        ctx.beginPath();
-        ctx.arc(head.x, head.y, spark.size * dpr, 0, 6.2832);
-        ctx.fill();
-      }
-      ctx.restore();
     }
 
     /* ---- viewport ---- */
@@ -352,8 +326,19 @@
     var FRAME_INTERVAL = 1000 / TARGET_FPS;
     var lastFrame = -Infinity;
 
+    /* Flame center inside cloud.png (normalized 0..1). */
+    var FIRE = { x: 0.550, y: 0.275 };
+
     /* The source image is square. Cover fills the viewport so no side bars show. */
     var FIT_MODE = "cover";
+
+    function glow(x, y, r, rgb, a) {
+      if (a <= 0 || r <= 0) return;
+      var oldAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = oldAlpha * a;
+      ctx.drawImage(getGlowSprite(rgb), x - r, y - r, r * 2, r * 2);
+      ctx.globalAlpha = oldAlpha;
+    }
 
     var t0 = performance.now();
     function frame(now) {
@@ -382,7 +367,27 @@
       if (ctx.imageSmoothingQuality !== undefined) ctx.imageSmoothingQuality = "high";
 
       ctx.drawImage(img, dx, dy, dw, dh);
-      drawFireSparks(t, dx, dy, dw, dh);
+
+      function X(nx) { return dx + nx * dw; }
+      function Y(ny) { return dy + ny * dh; }
+
+      /* ---- compact ember particles from the photographed flame ---- */
+      for (var i = 0; i < embers.length; i++) {
+        var e = embers[i];
+        var life = (e.ph + t * e.spd) % 1;
+        var fade = Math.sin(life * 3.14159);
+        var ex = X(FIRE.x + e.ox)
+          + Math.sin(life * e.swayF * 3.14159 + e.ph * 9.7) * e.swayA * dpr
+          + life * W * 0.006;
+        var ey = Y(FIRE.y + e.oy) - life * e.rise * H;
+        var dep = 0.35 + e.dep * 1.15;
+        var a = fade * (0.42 + 0.44 * Math.abs(Math.sin(t * e.twF + e.ph * 7.3))) * (0.50 + dep * 0.50);
+        glow(ex, ey, e.sz * dep * 6 * dpr, "255,90,20", a * 0.52);
+        ctx.fillStyle = "rgba(255,198,105," + (a * 0.96).toFixed(3) + ")";
+        ctx.beginPath();
+        ctx.arc(ex, ey, e.sz * dep * dpr, 0, 6.2832);
+        ctx.fill();
+      }
 
       /* ---- cosmic dust ---- */
       for (var k = 0; k < dust.length; k++) {
